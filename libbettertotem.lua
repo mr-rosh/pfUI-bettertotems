@@ -14,10 +14,14 @@ AIR_TOTEM_SLOT   = AIR_TOTEM_SLOT   or 4
 
 local _, class = UnitClass("player")
 
-local libtotem
+local libtotem = CreateFrame("Frame")
 local nameIconMap = {}
 local queue = { ["slot"] = nil, ["name"] = nil, ["start"] = nil, ["duration"] = nil, ["icon"] = nil }
 local active = { [1] = {}, [2] = {}, [3] = {}, [4] = {} }
+
+-- Always expose the lib (even for non-shamans) so dependent modules can call
+-- LibBetterTotem.HasTotemicMastery() safely.
+LibBetterTotem = libtotem
 local totems = {
   [FIRE_TOTEM_SLOT] = {
     --Fire Nova Totem (Fire)
@@ -73,44 +77,73 @@ local totems = {
   },
 }
 
+-- Cache the totemic mastery talent rank so we don't call GetTalentInfo on every
+-- refresh (RefreshList runs every 0.5s on vanilla via the OnUpdate emulator).
+local totemicMasteryRank = nil
+local function UpdateTotemicMastery()
+  if totemicMasteryRank == nil then
+    local _, _, _, _, rank = GetTalentInfo(3, 8)
+    totemicMasteryRank = rank == 1
+  end
+  return totemicMasteryRank
+end
+
+-- Exposed on libtotem; LibBetterTotem aliases it below.
+libtotem.HasTotemicMastery = UpdateTotemicMastery
+-- Prime the cache on load.
+UpdateTotemicMastery()
+
 GetBetterTotemInfo = function(id)
-  if not active[id] or not active[id].name then return end
+  local a = active[id]
+  if not a or not a.name then return end
   if GetRemainingDuration(id) < 0 or IsTotemDestroyed(id) then
     libtotem:Clean(id)
     return nil
   end
 
-  return 1, active[id].name, active[id].start, active[id].duration, active[id].icon, active[id].unitId
+  return 1, a.name, a.start, a.duration, a.icon, a.unitId
 end
 
 if class ~= "SHAMAN" then return end
 
-libtotem = CreateFrame("Frame")
 libtotem:RegisterEvent("SPELLCAST_STOP")
 libtotem:RegisterEvent("UNIT_MODEL_CHANGED")
 libtotem:RegisterEvent("PLAYER_DEAD")
 libtotem:SetScript("OnEvent", function()
+  -- Capture event/arg1 into locals (Classic 1.12-safe).
+  local event, arg1 = event, arg1
+
   if event == "PLAYER_DEAD" then
-    for i = 1,4 do
+    for i = 1, 4 do
       libtotem:Clean(i)
     end
   elseif event == "UNIT_MODEL_CHANGED" then
-    local unitId  = arg1
-    local unitName = UnitName(unitId)
-  
-    if string.find(unitName, "Totem") and UnitName(unitId .. "owner") == UnitName("player") then
-      local key = GetKeyIndexIfExists(nameIconMap,unitName)
-      if key then
-        local icon = nameIconMap[key]
-        active[GetTotemSlot(icon)].unitId = unitId
+    local unitId = arg1
+    local unitName = unitId and UnitName(unitId)
+
+    if unitName and string.find(unitName, "Totem") then
+      local ownerId = unitId .. "owner"
+      local ownerName = UnitName(ownerId)
+      if ownerName and ownerName == UnitName("player") then
+        local key = GetKeyIndexIfExists(nameIconMap, unitName)
+        if key then
+          local icon = nameIconMap[key]
+          local slot = GetTotemSlot(icon)
+          if slot and active[slot] then
+            active[slot].unitId = unitId
+          end
+        end
       end
     end
   elseif event == "SPELLCAST_STOP" then
     if queue.slot and queue.name then
-      active[queue.slot].name = queue.name
-      active[queue.slot].duration = queue.duration
-      active[queue.slot].icon = queue.icon
-      active[queue.slot].start = GetTime()
+      local a = active[queue.slot]
+      if a then
+        a.name = queue.name
+        a.duration = queue.duration
+        a.icon = queue.icon
+        a.start = GetTime()
+      end
       queue.slot = nil
       queue.name = nil
     end
@@ -120,19 +153,22 @@ end)
 libtotem.totems = totems
 
 libtotem.Clean = function(self, slot)
-  active[slot].name = nil
-  active[slot].start = nil
-  active[slot].duration = nil
-  active[slot].icon = nil
-  active[slot].unitId = nil
+  local a = active[slot]
+  if not a then return end
+  a.name = nil
+  a.start = nil
+  a.duration = nil
+  a.icon = nil
+  a.unitId = nil
 end
 
 libtotem.CheckAddQueue = function(self, name, rank, icon)
+  if not name or not icon then return nil end
   for slot = 1, 4 do
     for texture, data in pairs(totems[slot]) do
       if string.find(icon, texture, 1) then
         if rank then -- try to obtain plain rank number
-          _, _, rank = string.find(rank,"%s(%d+)")
+          _, _, rank = string.find(rank, "%s(%d+)")
         end
         queue.slot = slot
         queue.name = name
@@ -154,7 +190,7 @@ function GetKeyIndexIfExists(table, contains)
   local index = nil
   if table and contains and type(table) == "table" then
     for k, v in pairs(table) do
-      if string.find(contains, k) then 
+      if string.find(contains, k) then
         index = k
       end
     end
@@ -163,53 +199,50 @@ function GetKeyIndexIfExists(table, contains)
 end
 
 function GetTotemSlot(icon)
-  local totemSlot
+  if not icon then return nil end
   for slot = 1, 4 do
     for texture, data in pairs(totems[slot]) do
       if string.find(icon, texture, 1) then
-        totemSlot = slot
-        return totemSlot
+        return slot
       end
     end
   end
-  return totemSlot
+  return nil
 end
 
 function IsTotemTransition(id)
-  local transitioning = false
-  if active[id].unitId and active[id].name == nil or active[id].unitId == nil and active[id].name or queue.name ~= nil then
-    transitioning = true
+  local a = active[id]
+  if not a then return false end
+  -- Transitioning when: unitId set but no name yet, OR name set but no unitId,
+  -- OR a spell cast is queued. Parenthesized for clarity (and binds correctly).
+  if (a.unitId and a.name == nil) or (a.unitId == nil and a.name) or (queue.name ~= nil) then
+    return true
   end
-  return transitioning
+  return false
 end
 
 function IsTotemDestroyed(id)
-  local destroyed  = false
-  if not IsTotemTransition(id) and not UnitExists(active[id].unitId) and active[id].duration - GetRemainingDuration(id) > 1 then
-    destroyed = true
+  local a = active[id]
+  if not a then return false end
+  if IsTotemTransition(id) then return false end
+  if not a.duration or not a.start then return false end
+  -- Destroyed when the totem unit doesn't exist in the world and more than
+  -- 1 second has passed since the cast (totem failed to spawn or was removed).
+  if not a.unitId or not UnitExists(a.unitId) then
+    local remaining = GetRemainingDuration(id)
+    if not remaining then return false end
+    if a.duration - remaining > 1 then -- GetTime() - start > 1
+      return true
+    end
   end
-  return destroyed
+  return false
 end
 
 function GetRemainingDuration(id)
-  local timeLeft
-  if id then
-    timeLeft = active[id].start + active[id].duration - GetTime()
-  end
-  return timeLeft
+  local a = active[id]
+  if not a or not a.start or not a.duration then return 0 end
+  return a.start + a.duration - GetTime()
 end
-
-function IsTableEmpty (table)
-  local isEmpty = true
-  if type(table) == "table" then 
-      for _, _ in pairs(table) do
-          isEmpty = false
-      end
-  end
-  return isEmpty
-end
-
-LibBetterTotem = libtotem
 
 
 -- Check for totem spell casts

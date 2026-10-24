@@ -36,6 +36,20 @@ Looks and works very similarly to pfUI's default totem module, but with extra fe
 5. Restart World of Warcraft
 6. Disable pfUI's default totem module
 
+## Changelog
+
+### 1.1 (2026-10-24)
+
+- Fixed crash when placing totems: `COOLDOWN_FRAME_TYPE` was undefined (nil), so cooldown frames were never created and `CooldownFrame_SetTimer` received `nil`.
+- Guarded `GetSuperWoWDistance` against missing SuperWoW DLL (`UnitPosition`).
+- Added nil guards to `GetRemainingDuration`, `IsTotemTransition`, `IsTotemDestroyed`, and `GetBetterTotemInfo`.
+- Fixed operator precedence bug in `IsTotemTransition`.
+- Capture `event`/`arg1` as parameters in all script handlers (Classic 1.12-safe).
+- Cache `GetTalentInfo(3,8)` (totemic mastery) instead of querying every 0.5s.
+- Cache recall settings and precompute slot colors to reduce per-refresh work.
+- Removed dead code (`IsTableEmpty`).
+- Added `## SavedVariables` to TOC; bumped version to 1.1.
+
 ## Credit
 I'm new to modding WoW, so I learned from other addons. Most of the code in this addon isn't mine
 - pfUI's original totem module, it's mostly the same code.

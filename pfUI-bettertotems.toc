@@ -2,8 +2,10 @@
 ## Title: |cff33ffccpf|cffffffffUI|cffaaaaaa [Better Totems]
 ## Author: Bombg
 ## Notes: Improved version of pfUI's totem timers
-## Version: 1.0
+## Version: 1.1
+## X-Date: 2026-10-24
 ## Dependencies: pfUI
+## SavedVariables: pfUI_config
 
 # main
 libbettertotem.lua
